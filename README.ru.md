@@ -3,7 +3,7 @@
 <p>Структурированный Go-логгер на базе <code>log/slog</code> с цветным консольным выводом, префиксами компонентов и ротацией JSON-логов.</p>
 
 <p>
-    <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+    <img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
     <img src="https://goreportcard.com/badge/github.com/ra1phdd/logger" alt="Go report">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
