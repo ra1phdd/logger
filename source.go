@@ -13,6 +13,8 @@ import (
 var (
 	workingDirOnce sync.Once
 	workingDir     string
+	loggerDirOnce  sync.Once
+	loggerDir      string
 )
 
 func sourceFromPC(pc uintptr) slog.Source {
@@ -80,8 +82,10 @@ func callerPC() uintptr {
 }
 
 func isLoggerSource(file string) bool {
-	path := filepath.ToSlash(file)
-	return strings.Contains(path, "/pkg/logger/")
+	if file == "" || strings.HasSuffix(file, "_test.go") {
+		return false
+	}
+	return filepath.Clean(filepath.Dir(file)) == cachedLoggerDir()
 }
 
 func cachedWorkingDir() string {
@@ -92,4 +96,14 @@ func cachedWorkingDir() string {
 		}
 	})
 	return workingDir
+}
+
+func cachedLoggerDir() string {
+	loggerDirOnce.Do(func() {
+		_, file, _, ok := runtime.Caller(0)
+		if ok {
+			loggerDir = filepath.Clean(filepath.Dir(file))
+		}
+	})
+	return loggerDir
 }

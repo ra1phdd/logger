@@ -439,19 +439,46 @@ func TestSourceHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("logger source detection uses package path", func(t *testing.T) {
+	t.Run("logger source detection uses current package directory", func(t *testing.T) {
 		// Arrange
+		_, thisFile, _, ok := runtime.Caller(0)
+		if !ok {
+			t.Fatal("runtime.Caller(0) returned ok=false")
+		}
+		loggerFile := filepath.Join(filepath.Dir(thisFile), "source.go")
 
 		// Act
-		loggerPath := isLoggerSource("D:/repo/pkg/logger/logger.go")
+		loggerPath := isLoggerSource(loggerFile)
+		testPath := isLoggerSource(thisFile)
 		otherPath := isLoggerSource("D:/repo/internal/app/service.go")
 
 		// Assert
 		if !loggerPath {
-			t.Fatal("isLoggerSource() = false, want true for logger path")
+			t.Fatal("isLoggerSource() = false, want true for logger package file")
+		}
+		if testPath {
+			t.Fatal("isLoggerSource() = true, want false for _test.go file")
 		}
 		if otherPath {
 			t.Fatal("isLoggerSource() = true, want false for non-logger path")
+		}
+	})
+
+	t.Run("caller pc skips logger internals", func(t *testing.T) {
+		// Arrange
+		handler := newRecordingHandler()
+		log := newTestLogger(handler)
+
+		// Act
+		log.Info("hello")
+
+		// Assert
+		if len(handler.records) != 1 {
+			t.Fatalf("len(records) = %d, want 1", len(handler.records))
+		}
+		source := sourceFromPC(handler.records[0].PC)
+		if filepath.Base(source.File) != "logger_test.go" {
+			t.Fatalf("caller file = %q, want %q", filepath.Base(source.File), "logger_test.go")
 		}
 	})
 }
