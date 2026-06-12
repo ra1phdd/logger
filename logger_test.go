@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type recordingHandler struct {
@@ -265,6 +267,23 @@ func TestOptions(t *testing.T) {
 
 		// Act
 		WithJSONOutput(nil)(&cfg)
+
+		// Assert
+		if cfg.jsonOutput != nil {
+			t.Fatalf("cfg.jsonOutput = %v, want nil", cfg.jsonOutput)
+		}
+		if !cfg.disableFile {
+			t.Fatal("cfg.disableFile = false, want true")
+		}
+	})
+
+	t.Run("typed nil json output disables file output", func(t *testing.T) {
+		// Arrange
+		cfg := defaultConfig()
+		var writer *lumberjack.Logger
+
+		// Act
+		WithJSONOutput(writer)(&cfg)
 
 		// Assert
 		if cfg.jsonOutput != nil {

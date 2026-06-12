@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -25,12 +26,12 @@ type config struct {
 
 func defaultConfig() config {
 	return config{
-		level:      slog.LevelInfo,
-		stdout:     os.Stdout,
-		filePath:   defaultLogFilePath(time.Now()),
-		timeFormat: defaultTimeFormat,
+		level:       slog.LevelInfo,
+		stdout:      os.Stdout,
+		filePath:    defaultLogFilePath(time.Now()),
+		timeFormat:  defaultTimeFormat,
 		disableFile: runningUnderGoTest(),
-		exit:       os.Exit,
+		exit:        os.Exit,
 	}
 }
 
@@ -64,16 +65,16 @@ func WithLevelString(level string) Option {
 
 func WithOutput(w io.Writer) Option {
 	return func(cfg *config) {
-		if w != nil {
-			cfg.stdout = w
+		if writer := normalizeWriter(w); writer != nil {
+			cfg.stdout = writer
 		}
 	}
 }
 
 func WithJSONOutput(w io.Writer) Option {
 	return func(cfg *config) {
-		cfg.jsonOutput = w
-		cfg.disableFile = w == nil
+		cfg.jsonOutput = normalizeWriter(w)
+		cfg.disableFile = cfg.jsonOutput == nil
 	}
 }
 
@@ -119,4 +120,20 @@ func WithExit(exit func(int)) Option {
 			cfg.exit = exit
 		}
 	}
+}
+
+func normalizeWriter(w io.Writer) io.Writer {
+	if w == nil {
+		return nil
+	}
+
+	v := reflect.ValueOf(w)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if v.IsNil() {
+			return nil
+		}
+	}
+
+	return w
 }

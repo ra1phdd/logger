@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,7 +15,10 @@ import (
 )
 
 func newRootHandler(cfg config, level *slog.LevelVar) slog.Handler {
-	consoleOutput := cfg.stdout
+	consoleOutput := normalizeWriter(cfg.stdout)
+	if consoleOutput == nil {
+		consoleOutput = io.Discard
+	}
 	if file, ok := cfg.stdout.(*os.File); ok {
 		consoleOutput = colorable.NewColorable(file)
 	}
@@ -30,7 +34,7 @@ func newRootHandler(cfg config, level *slog.LevelVar) slog.Handler {
 		noColor:   cfg.noColor,
 	}
 
-	jsonOutput := cfg.jsonOutput
+	jsonOutput := normalizeWriter(cfg.jsonOutput)
 	if jsonOutput == nil && !cfg.disableFile {
 		if fileOutput := newRollingLogFile(cfg.filePath); fileOutput != nil {
 			jsonOutput = fileOutput

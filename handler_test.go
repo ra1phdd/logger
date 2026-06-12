@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func TestRootHandlerEnabled(t *testing.T) {
@@ -463,6 +465,28 @@ func TestNewRootHandlerSkipsNilRollingWriter(t *testing.T) {
 		// Assert
 		if handler.json != nil {
 			t.Fatal("json handler = non-nil, want nil when rolling file creation fails")
+		}
+	})
+
+	t.Run("typed nil json output does not create json handler", func(t *testing.T) {
+		// Arrange
+		cfg := defaultConfig()
+		cfg.stdout = os.Stdout
+		cfg.disableFile = true
+		var writer *lumberjack.Logger
+		cfg.jsonOutput = writer
+		level := &slog.LevelVar{}
+
+		// Act
+		root := newRootHandler(cfg, level)
+		handler, ok := root.(rootHandler)
+		if !ok {
+			t.Fatalf("newRootHandler() type = %T, want rootHandler", root)
+		}
+
+		// Assert
+		if handler.json != nil {
+			t.Fatal("json handler = non-nil, want nil for typed nil writer")
 		}
 	})
 }
