@@ -32,7 +32,9 @@ func newRootHandler(cfg config, level *slog.LevelVar) slog.Handler {
 
 	jsonOutput := cfg.jsonOutput
 	if jsonOutput == nil && !cfg.disableFile {
-		jsonOutput = newRollingLogFile(cfg.filePath)
+		if fileOutput := newRollingLogFile(cfg.filePath); fileOutput != nil {
+			jsonOutput = fileOutput
+		}
 	}
 
 	handler := rootHandler{

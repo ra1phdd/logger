@@ -436,3 +436,33 @@ func TestNewRollingLogFile(t *testing.T) {
 		}
 	})
 }
+
+func TestNewRootHandlerSkipsNilRollingWriter(t *testing.T) {
+	t.Run("invalid file path leaves json handler disabled", func(t *testing.T) {
+		// Arrange
+		dir := t.TempDir()
+		filePath := filepath.Join(dir, "occupied")
+		if err := os.WriteFile(filePath, []byte("busy"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		cfg := defaultConfig()
+		cfg.stdout = os.Stdout
+		cfg.filePath = filepath.Join(filePath, "app.log")
+		cfg.disableFile = false
+		cfg.jsonOutput = nil
+		level := &slog.LevelVar{}
+
+		// Act
+		root := newRootHandler(cfg, level)
+		handler, ok := root.(rootHandler)
+		if !ok {
+			t.Fatalf("newRootHandler() type = %T, want rootHandler", root)
+		}
+
+		// Assert
+		if handler.json != nil {
+			t.Fatal("json handler = non-nil, want nil when rolling file creation fails")
+		}
+	})
+}
