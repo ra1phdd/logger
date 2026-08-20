@@ -1,12 +1,15 @@
 package logger
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +100,90 @@ func TestRootHandlerHandleAddsComponentToJSONOnly(t *testing.T) {
 	if attr.Value.String() != "api" {
 		t.Fatalf("component attr = %q, want api", attr.Value.String())
 	}
+}
+
+func TestRootHandlerHandlePrefersProjectCaller(t *testing.T) {
+	console := newRecordingHandler()
+	json := newRecordingHandler()
+	handler := rootHandler{console: console, json: json}
+	externalPC := reflect.ValueOf(runtime.GC).Pointer()
+	record := slog.NewRecord(time.Now(), slog.LevelInfo, "hello", externalPC)
+
+	err := handleRecordFromProjectFrame(handler, record)
+
+	if err != nil {
+		t.Fatalf("Handle() error = %v, want nil", err)
+	}
+	for name, records := range map[string][]slog.Record{
+		"console": console.records,
+		"json":    json.records,
+	} {
+		if len(records) != 1 {
+			t.Fatalf("%s records = %d, want 1", name, len(records))
+		}
+		source := sourceFromPC(records[0].PC)
+		if filepath.Base(source.File) != "handler_test.go" {
+			t.Fatalf("%s source file = %q, want handler_test.go", name, source.File)
+		}
+	}
+}
+
+func TestRootHandlerHandleFindsProjectCallerWhenPCIsZero(t *testing.T) {
+	console := newRecordingHandler()
+	handler := rootHandler{console: console}
+	record := slog.NewRecord(time.Now(), slog.LevelInfo, "hello", 0)
+
+	err := handleRecordFromProjectFrame(handler, record)
+
+	if err != nil {
+		t.Fatalf("Handle() error = %v, want nil", err)
+	}
+	if len(console.records) != 1 {
+		t.Fatalf("console records = %d, want 1", len(console.records))
+	}
+	source := sourceFromPC(console.records[0].PC)
+	if filepath.Base(source.File) != "handler_test.go" {
+		t.Fatalf("source file = %q, want handler_test.go", source.File)
+	}
+}
+
+func TestRootHandlerRendersSameProjectSourceInConsoleAndJSON(t *testing.T) {
+	var consoleOutput bytes.Buffer
+	var jsonOutput bytes.Buffer
+	cfg := defaultConfig()
+	WithOutput(&consoleOutput)(&cfg)
+	WithJSONOutput(&jsonOutput)(&cfg)
+	WithNoColor(true)(&cfg)
+	level := &slog.LevelVar{}
+	handler, ok := newRootHandler(cfg, level).(rootHandler)
+	if !ok {
+		t.Fatalf("newRootHandler() type = %T, want rootHandler", newRootHandler(cfg, level))
+	}
+	record := slog.NewRecord(time.Now(), slog.LevelInfo, "hello", reflect.ValueOf(runtime.GC).Pointer())
+
+	if err := handleRecordFromProjectFrame(handler, record); err != nil {
+		t.Fatalf("Handle() error = %v, want nil", err)
+	}
+
+	var rendered map[string]any
+	if err := json.Unmarshal(jsonOutput.Bytes(), &rendered); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	source, ok := rendered[slog.SourceKey].(string)
+	if !ok {
+		t.Fatalf("JSON source = %#v, want string", rendered[slog.SourceKey])
+	}
+	if !strings.Contains(source, "handler_test.go:") {
+		t.Fatalf("JSON source = %q, want handler_test.go location", source)
+	}
+	if !strings.Contains(consoleOutput.String(), source+" > hello") {
+		t.Fatalf("console output = %q, want source %q", consoleOutput.String(), source)
+	}
+}
+
+//go:noinline
+func handleRecordFromProjectFrame(handler rootHandler, record slog.Record) error {
+	return handler.Handle(context.Background(), record)
 }
 
 func TestRootHandlerHandleJoinsErrors(t *testing.T) {
