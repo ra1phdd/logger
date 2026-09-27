@@ -95,6 +95,7 @@ func (h rootHandler) Enabled(ctx context.Context, level slog.Level) bool {
 
 func (h rootHandler) Handle(ctx context.Context, record slog.Record) error {
 	var result error
+	record.PC = projectCallerPC(record.PC)
 
 	if h.console != nil {
 		if err := h.console.Handle(ctx, record); err != nil {

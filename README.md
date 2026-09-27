@@ -62,6 +62,10 @@ func main() {
 - Console output is human-readable and colorized through `tint`.
 - Each console message gets a prefix like `<component> <file:line> >`.
 - If no component is set explicitly, it is derived from the caller path.
+- Source resolution prefers an active caller inside the current project. If no
+  project caller exists, Go module cache paths start at `module@version`, while
+  other external absolute paths are reduced to the file name.
+- Absolute source paths outside the project are never emitted.
 - JSON output includes normalized `level`, `source`, and `component` fields.
 
 By default:

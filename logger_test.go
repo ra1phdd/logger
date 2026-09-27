@@ -430,6 +430,72 @@ func TestLevelHelpers(t *testing.T) {
 }
 
 func TestSourceHelpers(t *testing.T) {
+	t.Run("source locations never expose paths outside project", func(t *testing.T) {
+		tests := []struct {
+			name string
+			root string
+			file string
+			want string
+		}{
+			{
+				name: "windows project path is relative and case insensitive",
+				root: `C:\work\app`,
+				file: `c:\work\app\cmd\nrzk\main.go`,
+				want: "cmd/nrzk/main.go:533",
+			},
+			{
+				name: "windows drive root remains absolute for containment",
+				root: `C:\`,
+				file: `c:\cmd\nrzk\main.go`,
+				want: "cmd/nrzk/main.go:533",
+			},
+			{
+				name: "windows UNC project path is case insensitive",
+				root: `\\Server\Share\App`,
+				file: `\\server\share\app\cmd\nrzk\main.go`,
+				want: "cmd/nrzk/main.go:533",
+			},
+			{
+				name: "windows module cache starts at module path",
+				root: `C:\work\app`,
+				file: `C:\Users\ra1ph\go\pkg\mod\github.com\wailsapp\wails\v3@v3.0.0-alpha2.117\pkg\application\application.go`,
+				want: "github.com/wailsapp/wails/v3@v3.0.0-alpha2.117/pkg/application/application.go:533",
+			},
+			{
+				name: "linux module cache starts at module path",
+				root: "/work/app",
+				file: "/home/user/go/pkg/mod/github.com/acme/lib@v1.2.3/pkg/lib.go",
+				want: "github.com/acme/lib@v1.2.3/pkg/lib.go:533",
+			},
+			{
+				name: "macos module cache starts at module path",
+				root: "/Users/dev/app",
+				file: "/Users/dev/go/pkg/mod/github.com/acme/lib@v1.2.3/pkg/lib.go",
+				want: "github.com/acme/lib@v1.2.3/pkg/lib.go:533",
+			},
+			{
+				name: "other external absolute path is reduced to file name",
+				root: "/work/app",
+				file: "/opt/generated/generated.go",
+				want: "generated.go:533",
+			},
+			{
+				name: "relative source is preserved",
+				root: "/work/app",
+				file: "pkg/service.go",
+				want: "pkg/service.go:533",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if got := sourceLocationForRoot(tt.file, 533, tt.root); got != tt.want {
+					t.Fatalf("sourceLocationForRoot(%q, 533, %q) = %q, want %q", tt.file, tt.root, got, tt.want)
+				}
+			})
+		}
+	})
+
 	t.Run("zero pc returns empty source", func(t *testing.T) {
 		// Arrange
 
@@ -439,6 +505,20 @@ func TestSourceHelpers(t *testing.T) {
 		// Assert
 		if source != (slog.Source{}) {
 			t.Fatalf("sourceFromPC(0) = %#v, want empty source", source)
+		}
+	})
+
+	t.Run("record pc resolves to the call instruction", func(t *testing.T) {
+		_, _, line, ok := runtime.Caller(0)
+		if !ok {
+			t.Fatal("runtime.Caller(0) returned ok=false")
+		}
+		wantLine := line + 5
+		pc := captureRecordPC()
+		source := sourceFromPC(pc)
+
+		if source.Line != wantLine {
+			t.Fatalf("source line = %d, want call line %d", source.Line, wantLine)
 		}
 	})
 
@@ -500,6 +580,44 @@ func TestSourceHelpers(t *testing.T) {
 			t.Fatalf("caller file = %q, want %q", filepath.Base(source.File), "logger_test.go")
 		}
 	})
+
+	t.Run("project caller pc is preserved", func(t *testing.T) {
+		pc, _, _, ok := runtime.Caller(0)
+		if !ok {
+			t.Fatal("runtime.Caller(0) returned ok=false")
+		}
+
+		if got := projectCallerPC(pc); got != pc {
+			t.Fatalf("projectCallerPC(%d) = %d, want original PC", pc, got)
+		}
+	})
+
+	t.Run("project caller common path does not allocate", func(t *testing.T) {
+		pc := captureRecordPC()
+		_ = sourceFromPC(pc)
+		_ = callerPC()
+		_ = projectCallerPC(pc)
+
+		if allocs := testing.AllocsPerRun(100, func() {
+			_ = callerPC()
+		}); allocs != 0 {
+			t.Fatalf("callerPC allocations = %v, want 0", allocs)
+		}
+		if allocs := testing.AllocsPerRun(100, func() {
+			_ = projectCallerPC(pc)
+		}); allocs != 0 {
+			t.Fatalf("projectCallerPC allocations = %v, want 0", allocs)
+		}
+	})
+}
+
+//go:noinline
+func captureRecordPC() uintptr {
+	var pcs [1]uintptr
+	if runtime.Callers(2, pcs[:]) == 0 {
+		return 0
+	}
+	return pcs[0]
 }
 
 func TestNewCreatesConfiguredLogger(t *testing.T) {
