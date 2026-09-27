@@ -34,26 +34,32 @@ func newRootHandler(cfg config, level *slog.LevelVar) slog.Handler {
 		noColor:   cfg.noColor,
 	}
 
+	var jsonHandler slog.Handler
 	jsonOutput := normalizeWriter(cfg.jsonOutput)
 	if jsonOutput == nil && !cfg.disableFile {
-		if fileOutput := newRollingLogFile(cfg.filePath); fileOutput != nil {
+		fileOutput := newRollingLogFile(cfg.filePath)
+		if fileOutput != nil {
 			jsonOutput = fileOutput
+		} else {
+			// Не удалось создать файл для логов - будем писать только в консоль
+			// Выводим предупреждение в stderr чтобы не потерять информацию
+			_, _ = os.Stderr.WriteString("WARNING: Failed to create log file at " + cfg.filePath + ", logging to console only\n")
 		}
 	}
 
-	handler := rootHandler{
-		console:   consoleHandler,
-		component: cfg.component,
-	}
 	if jsonOutput != nil {
-		handler.json = slog.NewJSONHandler(jsonOutput, &slog.HandlerOptions{
+		jsonHandler = slog.NewJSONHandler(jsonOutput, &slog.HandlerOptions{
 			AddSource:   true,
 			Level:       level,
 			ReplaceAttr: replaceJSONAttr,
 		})
 	}
 
-	return handler
+	return rootHandler{
+		console:   consoleHandler,
+		json:      jsonHandler,
+		component: cfg.component,
+	}
 }
 
 func newRollingLogFile(path string) *lumberjack.Logger {
@@ -146,11 +152,15 @@ func (h rootHandler) WithGroup(name string) slog.Handler {
 }
 
 func (h rootHandler) WithComponent(component string) slog.Handler {
-	h.component = component
-	if withComponentHandler, ok := h.console.(interface{ WithComponent(string) slog.Handler }); ok {
-		h.console = withComponentHandler.WithComponent(component)
+	console := h.console
+	if withComponentHandler, ok := console.(interface{ WithComponent(string) slog.Handler }); ok {
+		console = withComponentHandler.WithComponent(component)
 	}
-	return h
+	return rootHandler{
+		console:   console,
+		json:      h.json,
+		component: component,
+	}
 }
 
 type consolePrefixHandler struct {
