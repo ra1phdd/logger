@@ -11,10 +11,12 @@ var backgroundContext = context.Background()
 
 type Logger struct {
 	*slog.Logger
+
 	handler   slog.Handler
 	component string
 	level     *slog.LevelVar
 	exit      func(int)
+	sinkGroup *sinkGroup
 }
 
 type SlogLogger = Logger
@@ -28,13 +30,15 @@ func New(opts ...Option) *Logger {
 	level := &slog.LevelVar{}
 	level.Set(cfg.level)
 
-	handler := newRootHandler(cfg, level)
+	sinkGrp := newSinkGroup()
+	handler := newRootHandler(cfg, level, sinkGrp)
 	return &Logger{
 		Logger:    slog.New(handler),
 		handler:   handler,
 		component: cfg.component,
 		level:     level,
 		exit:      cfg.exit,
+		sinkGroup: sinkGrp,
 	}
 }
 
@@ -61,7 +65,7 @@ func (l *Logger) Named(component string) *Logger {
 		return l
 	}
 	handler := l.handler
-	if withComponentHandler, ok := handler.(interface{ WithComponent(string) slog.Handler }); ok {
+	if withComponentHandler, ok := handler.(interface{ WithComponent(component string) slog.Handler }); ok {
 		handler = withComponentHandler.WithComponent(component)
 	}
 	return l.cloneWithComponent(handler, component)
@@ -200,6 +204,7 @@ func (l *Logger) clone(handler slog.Handler) *Logger {
 		component: l.component,
 		level:     l.level,
 		exit:      l.exit,
+		sinkGroup: l.sinkGroup,
 	}
 }
 
@@ -213,5 +218,22 @@ func (l *Logger) cloneWithComponent(handler slog.Handler, component string) *Log
 		component: component,
 		level:     l.level,
 		exit:      l.exit,
+		sinkGroup: l.sinkGroup,
 	}
+}
+
+// Close gracefully shuts down all HTTP sinks, flushing any buffered records.
+// It respects the context deadline for the shutdown timeout.
+func (l *Logger) Close(ctx context.Context) error {
+	if l == nil || l.sinkGroup == nil {
+		return nil
+	}
+	return l.sinkGroup.close(ctx)
+}
+
+// Shutdown gracefully shuts down all sinks with default timeout.
+func (l *Logger) Shutdown() error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+	defer cancel()
+	return l.Close(ctx)
 }

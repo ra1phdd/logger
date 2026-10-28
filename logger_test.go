@@ -3,7 +3,6 @@ package logger
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -94,34 +93,6 @@ func attrByKey(record slog.Record, key string) (slog.Attr, bool) {
 	})
 
 	return found, ok
-}
-
-func expectedLocationForTestFile(t *testing.T, file string, line int) string {
-	t.Helper()
-
-	path := file
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-
-	rel, err := filepath.Rel(wd, file)
-	if err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-		path = rel
-	}
-
-	return fmt.Sprintf("%s:%d", filepath.ToSlash(path), line)
-}
-
-func recordForPrefixTest(t *testing.T, msg string) (slog.Record, string) {
-	t.Helper()
-
-	pc, file, line, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) returned ok=false")
-	}
-
-	return slog.NewRecord(time.Now(), slog.LevelInfo, msg, pc), expectedLocationForTestFile(t, file, line)
 }
 
 func currentDefaultLogger() *Logger {
@@ -749,6 +720,7 @@ func TestLoggerLogUsesBackgroundContextWhenNil(t *testing.T) {
 	log := newTestLogger(handler)
 
 	// Act
+	//nolint:staticcheck // SA1012: intentionally testing nil context handling
 	log.Log(nil, slog.LevelInfo, "hello", String("requestID", "42"))
 
 	// Assert
@@ -953,6 +925,7 @@ func TestNewContextFallsBackToDefaultLogger(t *testing.T) {
 	swapDefaultLogger(t, log)
 
 	// Act
+	//nolint:staticcheck // SA1012: intentionally testing nil context handling
 	ctx := NewContext(nil, nil)
 
 	// Assert
@@ -970,6 +943,7 @@ func TestFromContextNilFallsBackToDefault(t *testing.T) {
 	swapDefaultLogger(t, log)
 
 	// Act
+	//nolint:staticcheck // Testing nil context handling
 	fromContext := FromContext(nil)
 
 	// Assert
@@ -1070,6 +1044,7 @@ func TestLoggerContextMethodsLogExpectedLevels(t *testing.T) {
 	log.exit = func(int) {
 		exitCalls++
 	}
+	//nolint:staticcheck // SA1029: string key is fine for test
 	ctx := context.WithValue(context.Background(), "requestID", "42")
 
 	// Act

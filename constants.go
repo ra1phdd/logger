@@ -1,6 +1,9 @@
 package logger
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
 
 const (
 	levelTrace = slog.Level(-8)
@@ -15,4 +18,13 @@ const (
 	ansiYellow = "\x1b[33m"
 	ansiBlue   = "\033[96m"
 	ansiWhite  = "\x1b[37m"
+
+	// HTTP sink defaults.
+	defaultBufferSize      = 1024
+	defaultBatchSize       = 512
+	defaultFlushInterval   = 2 * time.Second
+	defaultMaxRetries      = 3
+	defaultShutdownTimeout = 3 * time.Second
+	defaultRetryInitial    = 100 * time.Millisecond
+	defaultRetryMax        = 10 * time.Second
 )
