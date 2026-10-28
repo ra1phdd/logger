@@ -197,18 +197,26 @@ func (h *rootHandler) Handle(ctx context.Context, record slog.Record) error {
 
 func (h *rootHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	var consoleSink, jsonSink slog.Handler
+	var vlSink, lokiSink *httpSink
+
 	if h.consoleSink != nil {
 		consoleSink = h.consoleSink.WithAttrs(attrs)
 	}
 	if h.jsonSink != nil {
 		jsonSink = h.jsonSink.WithAttrs(attrs)
 	}
+	if h.vlSink != nil {
+		vlSink = h.vlSink.WithAttrs(attrs)
+	}
+	if h.lokiSink != nil {
+		lokiSink = h.lokiSink.WithAttrs(attrs)
+	}
 
 	return &rootHandler{
 		consoleSink: consoleSink,
 		jsonSink:    jsonSink,
-		vlSink:      h.vlSink,
-		lokiSink:    h.lokiSink,
+		vlSink:      vlSink,
+		lokiSink:    lokiSink,
 		component:   h.component,
 		level:       h.level,
 	}
@@ -216,18 +224,26 @@ func (h *rootHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h *rootHandler) WithGroup(name string) slog.Handler {
 	var consoleSink, jsonSink slog.Handler
+	var vlSink, lokiSink *httpSink
+
 	if h.consoleSink != nil {
 		consoleSink = h.consoleSink.WithGroup(name)
 	}
 	if h.jsonSink != nil {
 		jsonSink = h.jsonSink.WithGroup(name)
 	}
+	if h.vlSink != nil {
+		vlSink = h.vlSink.WithGroup(name)
+	}
+	if h.lokiSink != nil {
+		lokiSink = h.lokiSink.WithGroup(name)
+	}
 
 	return &rootHandler{
 		consoleSink: consoleSink,
 		jsonSink:    jsonSink,
-		vlSink:      h.vlSink,
-		lokiSink:    h.lokiSink,
+		vlSink:      vlSink,
+		lokiSink:    lokiSink,
 		component:   h.component,
 		level:       h.level,
 	}

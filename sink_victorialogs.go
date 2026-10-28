@@ -63,6 +63,9 @@ func (e *victoriaLogsEncoder) encodeRecord(record slog.Record) string {
 	// Timestamp in RFC3339Nano (readable and precise)
 	entry["_time"] = record.Time.Format(time.RFC3339Nano)
 
+	// Add level explicitly (before attrs, so it can be overridden if needed)
+	entry["level"] = levelLabel(record.Level)
+
 	// Attributes: flatten all into the entry
 	record.Attrs(func(attr slog.Attr) bool {
 		addAttrToMap(entry, attr, "")

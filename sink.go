@@ -94,6 +94,16 @@ func newSinkGroup() *sinkGroup {
 	}
 }
 
+func (sg *sinkGroup) stats() []SinkStats {
+	result := make([]SinkStats, len(sg.sinks))
+	for i, s := range sg.sinks {
+		if s.stats != nil {
+			result[i] = s.stats.Stats()
+		}
+	}
+	return result
+}
+
 func (g *sinkGroup) add(s sink) {
 	g.sinks = append(g.sinks, s)
 }

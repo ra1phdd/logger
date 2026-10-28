@@ -208,6 +208,15 @@ func (l *Logger) clone(handler slog.Handler) *Logger {
 	}
 }
 
+// Stats returns operational statistics for all sinks.
+// Returns a slice where each element corresponds to a sink (console, file, victorialogs, loki).
+func (l *Logger) Stats() []SinkStats {
+	if l == nil || l.sinkGroup == nil {
+		return nil
+	}
+	return l.sinkGroup.stats()
+}
+
 func (l *Logger) cloneWithComponent(handler slog.Handler, component string) *Logger {
 	if l == nil {
 		return Default().cloneWithComponent(handler, component)

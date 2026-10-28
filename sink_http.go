@@ -19,11 +19,11 @@ type httpSink struct {
 	config *DeliveryConfig
 	url    string
 
-	bufferCh chan slog.Record
-	ticker   *time.Ticker
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
-	ctx      context.Context // Context for outgoing HTTP requests
+	bufferCh  chan slog.Record
+	ticker    *time.Ticker
+	stopCh    chan struct{}
+	sinkGroup *sinkGroup // Reference to parent sink group for shutdown
+	ctx       context.Context // Context for outgoing HTTP requests
 
 	encoder recordEncoder
 	client  *http.Client
@@ -71,15 +71,31 @@ func newHTTPSink(url string, cfg *DeliveryConfig, encoder recordEncoder, level *
 
 	// Start worker goroutine
 	sinkGrp.shutdownWg.Add(1)
-	go sink.worker(sinkGrp.closeCh)
+	go sink.worker(sinkGrp.closeCh, &sinkGrp.shutdownWg)
 
 	return sink
+}
+
+// WithAttrs returns a new httpSink with accumulated attributes.
+func (s *httpSink) WithAttrs(attrs []slog.Attr) *httpSink {
+	newSink := *s // shallow copy
+	newSink.handler = s.handler.WithAttrs(attrs)
+	return &newSink
+}
+
+// WithGroup returns a new httpSink with a group name added.
+func (s *httpSink) WithGroup(name string) *httpSink {
+	newSink := *s // shallow copy
+	newSink.handler = s.handler.WithGroup(name)
+	return &newSink
 }
 
 // httpSinkHandler is the slog.Handler that buffers records.
 type httpSinkHandler struct {
 	bufferCh chan slog.Record
 	stats    *sinkStats
+	groups   []string    // Active groups from WithGroup
+	preAttrs []slog.Attr // Attributes added via WithAttrs
 }
 
 func (h *httpSinkHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -87,6 +103,11 @@ func (h *httpSinkHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *httpSinkHandler) Handle(ctx context.Context, record slog.Record) error {
+	// If we have groups or preAttrs, wrap them into the record
+	if len(h.groups) > 0 || len(h.preAttrs) > 0 {
+		record = h.wrapRecord(record)
+	}
+
 	select {
 	case h.bufferCh <- record.Clone():
 		return nil
@@ -106,17 +127,71 @@ func (h *httpSinkHandler) Handle(ctx context.Context, record slog.Record) error 
 	}
 }
 
+// wrapRecord creates a new record with groups and preAttrs merged.
+func (h *httpSinkHandler) wrapRecord(record slog.Record) slog.Record {
+	if len(h.groups) == 0 && len(h.preAttrs) == 0 {
+		return record
+	}
+
+	// Collect all attributes (preAttrs first, then record attrs)
+	allAttrs := make([]slog.Attr, 0, len(h.preAttrs)+record.NumAttrs())
+	allAttrs = append(allAttrs, h.preAttrs...)
+	record.Attrs(func(a slog.Attr) bool {
+		allAttrs = append(allAttrs, a)
+		return true
+	})
+
+	// Wrap in groups from innermost to outermost
+	if len(h.groups) > 0 {
+		for i := len(h.groups) - 1; i >= 0; i-- {
+			// Convert attrs to []any for slog.Group
+			values := make([]any, 0, len(allAttrs)*2)
+			for _, attr := range allAttrs {
+				values = append(values, attr.Key, attr.Value.Any())
+			}
+			allAttrs = []slog.Attr{slog.Group(h.groups[i], values...)}
+		}
+	}
+
+	// Create new record with wrapped attributes
+	newRecord := slog.NewRecord(record.Time, record.Level, record.Message, record.PC)
+	newRecord.AddAttrs(allAttrs...)
+	return newRecord
+}
+
 func (h *httpSinkHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return h
+	newPreAttrs := make([]slog.Attr, 0, len(h.preAttrs)+len(attrs))
+	newPreAttrs = append(newPreAttrs, h.preAttrs...)
+	newPreAttrs = append(newPreAttrs, attrs...)
+
+	return &httpSinkHandler{
+		bufferCh: h.bufferCh,
+		stats:    h.stats,
+		groups:   h.groups,
+		preAttrs: newPreAttrs,
+	}
 }
 
 func (h *httpSinkHandler) WithGroup(name string) slog.Handler {
-	return h
+	if name == "" {
+		return h
+	}
+
+	newGroups := make([]string, len(h.groups)+1)
+	copy(newGroups, h.groups)
+	newGroups[len(h.groups)] = name
+
+	return &httpSinkHandler{
+		bufferCh: h.bufferCh,
+		stats:    h.stats,
+		groups:   newGroups,
+		preAttrs: h.preAttrs,
+	}
 }
 
 // worker runs the batching and delivery loop.
-func (sink *httpSink) worker(closeCh chan struct{}) {
-	defer sink.wg.Done()
+func (sink *httpSink) worker(closeCh chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
 	defer sink.ticker.Stop()
 
 	batch := make([]slog.Record, 0, sink.config.BatchSize)
@@ -179,6 +254,7 @@ func (sink *httpSink) flush(records []slog.Record) {
 
 		// Don't retry if not retryable (e.g., 4xx errors)
 		if !retryable {
+			sink.stats.droppedRetriesExhausted.Add(uint64(len(records)))
 			return
 		}
 
@@ -238,12 +314,4 @@ func (sink *httpSink) Enabled(ctx context.Context, level slog.Level) bool {
 
 func (sink *httpSink) Handle(ctx context.Context, record slog.Record) error {
 	return sink.handler.Handle(ctx, record)
-}
-
-func (sink *httpSink) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return sink.handler.WithAttrs(attrs)
-}
-
-func (sink *httpSink) WithGroup(name string) slog.Handler {
-	return sink.handler.WithGroup(name)
 }

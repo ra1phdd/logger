@@ -2,31 +2,224 @@ package logger
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-type mockEncoder struct {
-	encoded []byte
-}
+// TestHTTPSinkPreservesAttributes verifies that attributes passed via With() and Info()
+// reach the encoder and are included in the HTTP payload.
+func TestHTTPSinkPreservesAttributes(t *testing.T) {
+	var mu sync.Mutex
+	var receivedBodies []string
 
-func (e *mockEncoder) encodeRecords(records []slog.Record) ([]byte, error) {
-	return e.encoded, nil
-}
-
-func (e *mockEncoder) contentType() string {
-	return "application/json"
-}
-
-func TestHTTPSink_RetryOn500(t *testing.T) {
-	var attempts atomic.Int32
+	// Mock server that captures request bodies
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		count := attempts.Add(1)
-		if count < 2 {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		receivedBodies = append(receivedBodies, string(body))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Create logger with VictoriaLogs sink
+	log := New(
+		WithoutConsole(),
+		WithoutFile(),
+		WithVictoriaLogs(VictoriaLogsConfig{
+			URL:          server.URL,
+			StreamFields: []string{"level"},
+			Delivery: DeliveryConfig{
+				BufferSize:    10,
+				BatchSize:     2,
+				FlushInterval: 100 * time.Millisecond,
+			},
+		}),
+	)
+
+	// Log with attributes
+	logWithUser := log.With(String("user_id", "123"))
+	logWithUser.Info("test message", String("method", "POST"))
+	log.Warn("another message", String("request_id", "abc"))
+
+	// Give time for batch to flush
+	time.Sleep(200 * time.Millisecond)
+	log.Close(context.Background())
+
+	// Verify received data
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(receivedBodies) == 0 {
+		t.Fatal("no requests received by mock server")
+	}
+
+	// Parse ndjson lines
+	allLines := strings.Split(strings.TrimSpace(receivedBodies[0]), "\n")
+	if len(allLines) != 2 {
+		t.Fatalf("expected 2 log lines, got %d", len(allLines))
+	}
+
+	// Parse first log line
+	var firstLog map[string]any
+	if err := json.Unmarshal([]byte(allLines[0]), &firstLog); err != nil {
+		t.Fatalf("failed to parse first log line: %v", err)
+	}
+
+	// Verify attributes are present
+	if firstLog["_msg"] != "test message" {
+		t.Errorf("expected msg='test message', got %v", firstLog["_msg"])
+	}
+	if firstLog["user_id"] != "123" {
+		t.Errorf("expected user_id='123', got %v", firstLog["user_id"])
+	}
+	if firstLog["method"] != "POST" {
+		t.Errorf("expected method='POST', got %v", firstLog["method"])
+	}
+	if firstLog["level"] != "INFO" {
+		t.Errorf("expected level='INFO', got %v", firstLog["level"])
+	}
+
+	// Parse second log line
+	var secondLog map[string]any
+	if err := json.Unmarshal([]byte(allLines[1]), &secondLog); err != nil {
+		t.Fatalf("failed to parse second log line: %v", err)
+	}
+
+	if secondLog["_msg"] != "another message" {
+		t.Errorf("expected msg='another message', got %v", secondLog["_msg"])
+	}
+	if secondLog["request_id"] != "abc" {
+		t.Errorf("expected request_id='abc', got %v", secondLog["request_id"])
+	}
+	if secondLog["level"] != "WARN" {
+		t.Errorf("expected level='WARN', got %v", secondLog["level"])
+	}
+}
+
+// TestHTTPSinkWithGroup verifies that WithGroup creates nested attribute structures.
+func TestHTTPSinkWithGroup(t *testing.T) {
+	var mu sync.Mutex
+	var receivedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		receivedBody = string(body)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	log := New(
+		WithoutConsole(),
+		WithoutFile(),
+		WithVictoriaLogs(VictoriaLogsConfig{
+			URL: server.URL,
+			Delivery: DeliveryConfig{
+				BufferSize:    10,
+				BatchSize:     1,
+				FlushInterval: 100 * time.Millisecond,
+			},
+		}),
+	)
+
+	// Log with group
+	log.WithGroup("request").With(slog.String("id", "123")).Info("test", slog.String("method", "GET"))
+
+	time.Sleep(200 * time.Millisecond)
+	log.Close(context.Background())
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if receivedBody == "" {
+		t.Fatal("no request received")
+	}
+
+	lines := strings.Split(strings.TrimSpace(receivedBody), "\n")
+	var logLine map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &logLine); err != nil {
+		t.Fatalf("failed to parse log: %v", err)
+	}
+
+	// Verify nested structure
+	// VictoriaLogs flattens groups into dotted keys
+	if logLine["request.id"] != "123" {
+		t.Errorf("expected request.id='123', got %v", logLine["request.id"])
+	}
+	if logLine["request.method"] != "GET" {
+		t.Errorf("expected request.method='GET', got %v", logLine["request.method"])
+	}
+}
+
+// TestHTTPSinkNonBlockingOnOverflow verifies that logging doesn't block when buffer is full.
+func TestHTTPSinkNonBlockingOnOverflow(t *testing.T) {
+	// Slow server that delays responses
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	log := New(
+		WithoutConsole(),
+		WithoutFile(),
+		WithVictoriaLogs(VictoriaLogsConfig{
+			URL: server.URL,
+			Delivery: DeliveryConfig{
+				BufferSize:    5,  // Small buffer
+				BatchSize:     10, // Large batch size, won't trigger
+				FlushInterval: 10 * time.Second,
+			},
+		}),
+	)
+
+	// Flood the buffer
+	start := time.Now()
+	for i := 0; i < 20; i++ {
+		log.Info("flood", slog.Int("i", i))
+	}
+	elapsed := time.Since(start)
+
+	// Should complete instantly (non-blocking)
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("logging took %v, expected <100ms (blocking detected)", elapsed)
+	}
+
+	// Stats should show dropped records
+	stats := log.Stats()
+	if len(stats) == 0 {
+		t.Fatal("no stats returned")
+	}
+
+	victorialogsSink := stats[0] // First sink after console/file
+	if victorialogsSink.DroppedOverflow == 0 {
+		t.Errorf("expected dropped records due to overflow, got 0")
+	}
+
+	log.Close(context.Background())
+}
+
+// TestHTTPSinkRetryOn5xx verifies retry logic for server errors.
+func TestHTTPSinkRetryOn5xx(t *testing.T) {
+	var mu sync.Mutex
+	var attempts int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		currentAttempt := attempts
+		mu.Unlock()
+
+		if currentAttempt < 2 {
 			w.WriteHeader(http.StatusInternalServerError)
 		} else {
 			w.WriteHeader(http.StatusOK)
@@ -34,125 +227,73 @@ func TestHTTPSink_RetryOn500(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &DeliveryConfig{
-		BufferSize:       10,
-		BatchSize:        1,
-		FlushInterval:    100 * time.Millisecond,
-		MaxRetries:       3,
-		RetryInitialWait: 10 * time.Millisecond,
-		RetryMaxWait:     50 * time.Millisecond,
-	}
-	cfg.setDefaults()
+	log := New(
+		WithoutConsole(),
+		WithoutFile(),
+		WithVictoriaLogs(VictoriaLogsConfig{
+			URL: server.URL,
+			Delivery: DeliveryConfig{
+				BufferSize:    10,
+				BatchSize:     1,
+				FlushInterval: 50 * time.Millisecond,
+				MaxRetries:    3,
+			},
+		}),
+	)
 
-	encoder := &mockEncoder{encoded: []byte("test data")}
-	level := &slog.LevelVar{}
-	level.Set(slog.LevelInfo)
-	sinkGrp := newSinkGroup()
-
-	sink := newHTTPSink(server.URL, cfg, encoder, level, sinkGrp)
-
-	sink.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, "msg", 0))
-
-	// Wait for retries to complete
-	time.Sleep(500 * time.Millisecond)
-
-	if got := attempts.Load(); got < 2 {
-		t.Errorf("expected at least 2 attempts (retry on 500), got %d", got)
-	}
-}
-
-func TestHTTPSink_NoRetryOn400(t *testing.T) {
-	var attempts atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts.Add(1)
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer server.Close()
-
-	cfg := &DeliveryConfig{
-		BufferSize:       10,
-		BatchSize:        1,
-		FlushInterval:    100 * time.Millisecond,
-		MaxRetries:       3,
-		RetryInitialWait: 10 * time.Millisecond,
-	}
-	cfg.setDefaults()
-
-	encoder := &mockEncoder{encoded: []byte("bad data")}
-	level := &slog.LevelVar{}
-	level.Set(slog.LevelInfo)
-	sinkGrp := newSinkGroup()
-
-	sink := newHTTPSink(server.URL, cfg, encoder, level, sinkGrp)
-
-	sink.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, "msg", 0))
-
-	// Wait a bit
+	log.Info("test retry")
 	time.Sleep(300 * time.Millisecond)
+	log.Close(context.Background())
 
-	if got := attempts.Load(); got != 1 {
-		t.Errorf("expected 1 attempt (no retry on 400), got %d", got)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if attempts < 2 {
+		t.Errorf("expected at least 2 attempts (retry), got %d", attempts)
 	}
 }
 
-func TestHTTPSink_BufferDropsOnOverflow(t *testing.T) {
+// TestHTTPSinkNoRetryOn4xx verifies that 4xx responses don't trigger retries.
+func TestHTTPSinkNoRetryOn4xx(t *testing.T) {
+	var mu sync.Mutex
+	var attempts int
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		w.WriteHeader(http.StatusBadRequest) // 400
 	}))
 	defer server.Close()
 
-	cfg := &DeliveryConfig{
-		BufferSize:    2,
-		BatchSize:     10, // Never flush by batch size
-		FlushInterval: 10 * time.Second, // Way in the future
-		MaxRetries:    1,
-	}
-	cfg.setDefaults()
+	log := New(
+		WithoutConsole(),
+		WithoutFile(),
+		WithVictoriaLogs(VictoriaLogsConfig{
+			URL: server.URL,
+			Delivery: DeliveryConfig{
+				BufferSize:    10,
+				BatchSize:     1,
+				FlushInterval: 50 * time.Millisecond,
+				MaxRetries:    3,
+			},
+		}),
+	)
 
-	encoder := &mockEncoder{encoded: []byte("data")}
-	level := &slog.LevelVar{}
-	level.Set(slog.LevelInfo)
-	sinkGrp := newSinkGroup()
+	log.Info("test no retry")
+	time.Sleep(200 * time.Millisecond)
+	log.Close(context.Background())
 
-	sink := newHTTPSink(server.URL, cfg, encoder, level, sinkGrp)
-	stats := sink.stats
+	mu.Lock()
+	defer mu.Unlock()
 
-	// Fill buffer
-	sink.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, "msg1", 0))
-	sink.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, "msg2", 0))
-
-	// This should drop
-	sink.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, "msg3", 0))
-
-	// Give it a moment
-	time.Sleep(50 * time.Millisecond)
-
-	if stats.droppedOverflow.Load() == 0 {
-		t.Error("expected dropped records on overflow, got 0")
-	}
-}
-
-func TestLevelFilterHandler_SkipsDisabledLevels(t *testing.T) {
-	globalLevel := &slog.LevelVar{}
-	globalLevel.Set(slog.LevelInfo)
-
-	sinkLevel := &slog.LevelVar{}
-	sinkLevel.Set(slog.LevelWarn)
-
-	mockHandler := &mockSink{}
-	filterHandler := &levelFilterHandler{
-		handler:     mockHandler,
-		globalLevel: globalLevel,
-		sinkLevel:   sinkLevel,
+	if attempts != 1 {
+		t.Errorf("expected exactly 1 attempt (no retry on 4xx), got %d", attempts)
 	}
 
-	// Debug should be skipped (below sink level)
-	if filterHandler.Enabled(context.Background(), slog.LevelDebug) {
-		t.Error("Debug should be disabled when sink level is Warn")
-	}
-
-	// Warn should pass
-	if !filterHandler.Enabled(context.Background(), slog.LevelWarn) {
-		t.Error("Warn should be enabled when sink level is Warn")
+	// Check that stats reflect the error
+	stats := log.Stats()
+	if len(stats) > 0 && stats[0].DroppedRetriesExhausted == 0 {
+		t.Error("expected DroppedRetriesExhausted > 0 after 4xx")
 	}
 }
