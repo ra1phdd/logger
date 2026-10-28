@@ -74,8 +74,9 @@ func TestHTTPSinkPreservesAttributes(t *testing.T) {
 	}
 
 	// Verify attributes are present
-	if firstLog["_msg"] != "test message" {
-		t.Errorf("expected msg='test message', got %v", firstLog["_msg"])
+	expectedMsg := "test message user_id=123 method=POST"
+	if firstLog["_msg"] != expectedMsg {
+		t.Errorf("expected msg='%s', got %v", expectedMsg, firstLog["_msg"])
 	}
 	if firstLog["user_id"] != "123" {
 		t.Errorf("expected user_id='123', got %v", firstLog["user_id"])
@@ -93,8 +94,9 @@ func TestHTTPSinkPreservesAttributes(t *testing.T) {
 		t.Fatalf("failed to parse second log line: %v", err)
 	}
 
-	if secondLog["_msg"] != "another message" {
-		t.Errorf("expected msg='another message', got %v", secondLog["_msg"])
+	expectedMsg2 := "another message request_id=abc"
+	if secondLog["_msg"] != expectedMsg2 {
+		t.Errorf("expected msg='%s', got %v", expectedMsg2, secondLog["_msg"])
 	}
 	if secondLog["request_id"] != "abc" {
 		t.Errorf("expected request_id='abc', got %v", secondLog["request_id"])

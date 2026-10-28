@@ -110,8 +110,11 @@ func (e *lokiEncoder) extractLabelsAndLogLine(record slog.Record) (map[string]st
 	}
 	defer lokiEntryPool.Put(entryPtr)
 
+	// Build msg with message + all attributes in key=value format
+	var msgBuf strings.Builder
+	msgBuf.WriteString(record.Message)
+
 	// Set base fields
-	entry["msg"] = record.Message
 	entry["level"] = levelLabel(record.Level)
 
 	if e.labelSet["level"] {
@@ -121,15 +124,22 @@ func (e *lokiEncoder) extractLabelsAndLogLine(record slog.Record) (map[string]st
 		labels["component"] = "" // Default, may be overridden
 	}
 
-	// Single pass through attributes: extract labels and add to entry
+	// Single pass through attributes: extract labels, add to entry, and add to msg
 	record.Attrs(func(attr slog.Attr) bool {
 		addAttrToMap(entry, attr, "")
+		// Add to msg in key=value format
+		msgBuf.WriteString(" ")
+		formatAttrForMsg(&msgBuf, attr, "")
+
 		if e.labelSet[attr.Key] {
 			attr.Value = attr.Value.Resolve()
 			labels[attr.Key] = fmt.Sprintf("%v", attr.Value.Any())
 		}
 		return true
 	})
+
+	// Set final msg with all attributes
+	entry["msg"] = msgBuf.String()
 
 	// Add static labels (override extracted ones)
 	for k, v := range e.staticLabels {

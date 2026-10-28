@@ -145,9 +145,12 @@ func TestLokiEncoder_LogLineContainsAllData(t *testing.T) {
 		t.Fatalf("log line is not valid JSON: %v, line: %s", err, logLine)
 	}
 
-	if logObj["msg"] != "test message" {
-		t.Errorf("msg = %v, want 'test message'", logObj["msg"])
+	// msg now contains message + all attributes in key=value format
+	expectedMsg := "test message user_id=123 attempt=5"
+	if logObj["msg"] != expectedMsg {
+		t.Errorf("msg = %v, want '%s'", logObj["msg"], expectedMsg)
 	}
+	// Attributes are still present as separate fields
 	if logObj["user_id"] != "123" {
 		t.Errorf("user_id = %v, want '123'", logObj["user_id"])
 	}

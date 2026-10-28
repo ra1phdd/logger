@@ -1,10 +1,10 @@
 package logger
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -36,7 +36,7 @@ func (e *victoriaLogsEncoder) contentType() string {
 }
 
 func (e *victoriaLogsEncoder) encodeRecords(records []slog.Record) ([]byte, error) {
-	var buf bytes.Buffer
+	var buf strings.Builder
 
 	for _, record := range records {
 		line := e.encodeRecord(record)
@@ -44,7 +44,7 @@ func (e *victoriaLogsEncoder) encodeRecords(records []slog.Record) ([]byte, erro
 		buf.WriteString("\n")
 	}
 
-	return buf.Bytes(), nil
+	return []byte(buf.String()), nil
 }
 
 // encodeRecord converts a single slog.Record to VictoriaLogs JSON line format.
@@ -57,8 +57,9 @@ func (e *victoriaLogsEncoder) encodeRecord(record slog.Record) string {
 	}
 	defer vlEntryPool.Put(entryPtr)
 
-	// Message field
-	entry["_msg"] = record.Message
+	// Build _msg with message + all attributes in key=value format
+	var msgBuf strings.Builder
+	msgBuf.WriteString(record.Message)
 
 	// Timestamp in RFC3339Nano (readable and precise)
 	entry["_time"] = record.Time.Format(time.RFC3339Nano)
@@ -66,11 +67,17 @@ func (e *victoriaLogsEncoder) encodeRecord(record slog.Record) string {
 	// Add level explicitly (before attrs, so it can be overridden if needed)
 	entry["level"] = levelLabel(record.Level)
 
-	// Attributes: flatten all into the entry
+	// Attributes: flatten all into the entry AND add to _msg
 	record.Attrs(func(attr slog.Attr) bool {
 		addAttrToMap(entry, attr, "")
+		// Also add to _msg in key=value format
+		msgBuf.WriteString(" ")
+		formatAttrForMsg(&msgBuf, attr, "")
 		return true
 	})
+
+	// Set final _msg with all attributes
+	entry["_msg"] = msgBuf.String()
 
 	// Stream fields: extract into _stream or use static labels
 	streamPtr := vlStreamPool.Get().(*map[string]string)

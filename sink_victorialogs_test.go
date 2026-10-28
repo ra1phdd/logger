@@ -31,8 +31,8 @@ func TestVictoriaLogsEncoder_Basic(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	if entry["_msg"] != "test message" {
-		t.Errorf("_msg = %v, want 'test message'", entry["_msg"])
+	if entry["_msg"] != "test message user_id=123 request_id=456" {
+		t.Errorf("_msg = %v, want 'test message user_id=123 request_id=456'", entry["_msg"])
 	}
 
 	if entry["user_id"] != "123" {

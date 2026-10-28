@@ -2,7 +2,9 @@ package logger
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -124,4 +126,27 @@ func (g *sinkGroup) close(ctx context.Context) error {
 		}
 	})
 	return g.shutdownErr
+}
+
+// formatAttrForMsg formats a single attribute into key=value format for msg field.
+// Used by both VictoriaLogs and Loki encoders.
+func formatAttrForMsg(buf *strings.Builder, attr slog.Attr, prefix string) {
+	key := attr.Key
+	if prefix != "" {
+		key = prefix + "." + key
+	}
+
+	attr.Value = attr.Value.Resolve()
+	switch attr.Value.Kind() {
+	case slog.KindGroup:
+		// Flatten groups: group.key=value
+		for _, groupAttr := range attr.Value.Group() {
+			buf.WriteString(" ")
+			formatAttrForMsg(buf, groupAttr, key)
+		}
+	default:
+		buf.WriteString(key)
+		buf.WriteString("=")
+		buf.WriteString(fmt.Sprintf("%v", attr.Value.Any()))
+	}
 }
